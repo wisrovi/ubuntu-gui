@@ -1,0 +1,120 @@
+# Define reusable GPU resource constraints
+x-resources: &resources_gpu
+  # la shm_size es calculada de acuerdo al 80% de la memoria RAM como maximo
+  # es importante que el ordenador a entrenar tenga al menos lo mismo de swap que de RAM
+  shm_size: "24g"
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            device_ids: ["0"]
+            capabilities: [gpu]
+
+services:
+  ubuntu-gui:
+    <<: *resources_gpu
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wisrovis/lubuos:latest
+    container_name: lubuOS
+    ports:
+      - "20822:22"
+      - "5901:5901"
+    volumes:
+      - ./lubuos:/root/lubuos
+    environment:
+      TZ: Asia/Shanghai
+      VNC_RESOLUTION: 1280x800
+    # restart: always
+    hostname: ${USER}
+    privileged: true
+    labels:
+      - "autoheal=true"
+      - "com.centurylinklabs.watchtower.enable=true"
+    # healthcheck:
+    #   test: [nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader"]
+    #   interval: 20s # Frecuencia de verificación
+    #   timeout: 5s # Tiempo máximo para completar la verificación
+    #   retries: 3 # Intentos antes de marcar como unhealthy
+    #   start_period: 20s # Periodo inicial antes de comenzar las verificaciones
+
+  # Servicio para el servidor Guacamole
+  guacamole:
+    image: guacamole/guacamole:latest
+    restart: unless-stopped
+    links:
+      - guacd
+    environment:
+      # Conecta Guacamole con el demonio guacd
+      GUACD_HOSTNAME: guacd
+      GUACD_PORT: 4822
+    ports:
+      # Puerto de acceso web a Guacamole
+      - "8080:8080" # Puedes cambiar el puerto si el 8080 está en uso
+    depends_on:
+      - guacd
+
+  # Servicio para el demonio guacd (necesario para las conexiones VNC/RDP)
+  guacd:
+    image: guacamole/guacd:latest
+    restart: unless-stopped
+
+  # Servicio para la base de datos PostgreSQL (alternativa a MySQL para almacenar configuraciones)
+  # Necesitas esto si quieres guardar tus configuraciones de conexión de forma persistente
+  guacd-db:
+    image: postgres:13
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: guacamole_db
+      POSTGRES_USER: guacamole_user
+      POSTGRES_PASSWORD: your_strong_password # CAMBIA ESTA CONTRASEÑA
+    volumes:
+      # Monta un volumen para persistir los datos de la base de datos
+      - guacamole_db_data:/var/lib/postgresql/data
+
+  # Servicio para la inicialización de la base de datos de Guacamole
+  # Solo se ejecuta una vez para configurar la DB
+  guacamole-initdb:
+    image: guacamole/guacamole:latest
+    command: ["/opt/guacamole/bin/initdb.sh", "--postgresql"]
+    environment:
+      POSTGRES_HOSTNAME: guacd-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: guacamole_db
+      POSTGRES_USER: guacamole_user
+      POSTGRES_PASSWORD: your_strong_password # MISMA CONTRASEÑA QUE EN guacd-db
+    depends_on:
+      - guacd-db
+
+  watchtower:
+    image: containrrr/watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: always
+    environment:
+      - WATCHTOWER_LABEL_ENABLE=true # Habilita el control por etiquetas
+      - WATCHTOWER_SCHEDULE=0 0 0,2,4,6,8,10,12,14,16,18,20,22 * * * # todos los segundos, minutos, dias, semanas, meses, a las horas 0,2,...,22
+      - WATCHTOWER_CLEANUP=true # Elimina imágenes antiguas después de actualizar
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+
+  autoheal:
+    environment:
+      - AUTOHEAL_INTERVAL=10
+      - CURL_TIMEOUT=30
+      - AUTOHEAL_CONTAINER_LABEL=all
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    image: willfarrell/autoheal
+    restart: always
+
+# Definición de volúmenes persistentes
+volumes:
+  guacamole_db_data:

@@ -1,0 +1,9 @@
+#!/bin/bash
+# Inicia el administrador de ventanas para XFCE
+startxfce4 &
+
+# Espera un momento para que XFCE inicie (opcional, pero puede ayudar)
+sleep 1
+
+# Asegúrate de que el terminal se inicie
+gnome-terminal &
